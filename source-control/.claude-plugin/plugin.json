@@ -1,0 +1,40 @@
+{
+  "name": "source-control",
+  "version": "0.7.0",
+  "description": "Source Control for Claude Code: Git status above the chat box, a panel with changes, commit, a history graph, branches and worktrees, plus fetch, pull, push and sync in one click. English and German.",
+  "author": {
+    "name": "manuel-will"
+  },
+  "repository": "https://github.com/manuel-will/cc-source-control",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "fetchIntervalMinutes": {
+      "type": "number",
+      "title": "Fetch interval (minutes)",
+      "description": "How often `git fetch` runs in the background, so ↓ counts are right. 0 turns it off.",
+      "required": false,
+      "default": 10
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Status poll (seconds)",
+      "description": "How often the local Git status is read (no network). Claude’s commands and your actions refresh at once anyway.",
+      "required": false,
+      "default": 30
+    },
+    "staleAfterHours": {
+      "type": "number",
+      "title": "Stale after (hours)",
+      "description": "When the last fetch counts as old and is marked yellow.",
+      "required": false,
+      "default": 12
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "`auto` follows Claude Code’s language; `en` or `de` sets it.",
+      "required": false,
+      "default": "auto"
+    }
+  }
+}

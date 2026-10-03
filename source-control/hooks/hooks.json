@@ -1,0 +1,4 @@
+{
+  "description": "Source Control: Statusleiste über dem Prompt, Panel rechts, /git, Aktualisierung nach Claudes Befehlen und Hintergrund-Fetch",
+  "modules": ["./register.tsx"]
+}

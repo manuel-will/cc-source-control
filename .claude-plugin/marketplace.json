@@ -1,0 +1,14 @@
+{
+  "name": "cc-source-control",
+  "owner": {
+    "name": "manuel-will"
+  },
+  "description": "Source Control for Claude Code: Git status above the chat box, a panel with changes, commit, history graph, branches and worktrees, and fetch, pull, push and sync in one click.",
+  "plugins": [
+    {
+      "name": "source-control",
+      "source": "./source-control",
+      "description": "Git status above the chat box and a VS Code-style Source Control panel beside the chat: changes, commit, a history graph with branches and merges, worktrees, stashes, and fetch, pull, push and sync in one click. English and German."
+    }
+  ]
+}
