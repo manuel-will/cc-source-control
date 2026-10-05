@@ -4,7 +4,11 @@
 
 A mod for Claude Code (desktop app and terminal) that makes Git as visible and as easy to drive as VS Code's Source Control. It is built for working on one repository from several machines: you see at a glance whether there is something to pull or push before the copies drift apart.
 
+[![30-second demo](docs/images/video-poster.png)](https://github.com/manuel-will/cc-source-control/releases/download/v0.7.1/cc-source-control-launch.mp4)
+
 **The band above the chat box**: always there, minimal:
+
+![The band in Claude Desktop: main, 2 to pull, 1 to push, and the Sync button](docs/images/band.png)
 
 ```
 ⎇ main 2↓ 1↑  ✎ 3 · 4 min ago                               [ ↻ Sync 2↓ 1↑ ]  ◨
@@ -27,6 +31,11 @@ A mod for Claude Code (desktop app and terminal) that makes Git as visible and a
 - `◨` opens or closes the **Source Control panel** beside the chat.
 
 **The Source Control panel** (docked on the right; above the prompt in narrow terminals):
+
+<p>
+  <img src="docs/images/panel-history.png" width="400" alt="The panel with the history graph: incoming and outgoing commits, branches merging">
+  <img src="docs/images/panel-conflict.png" width="400" alt="The panel during a merge conflict, with Ask Claude to resolve">
+</p>
 
 ```
 Source Control                          ↻ Fetch  ↓ Pull  ↑ Push

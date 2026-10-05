@@ -64,6 +64,12 @@ export const REPOSITORY: Script = {
 }
 
 /**
+ * A path as the fixtures name it: the engine hands Windows paths to the fs
+ * hooks with a drive and backslashes (`C:\work\.git\HEAD`).
+ */
+const posixOf = (path: string): string => path.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
+
+/**
  * A session in /work whose git answers from `script` (longest matching key
  * wins; anything unknown fails as git does outside a repository), keeping
  * what the mod does there.
@@ -123,7 +129,7 @@ export function inRepository(
   })
 
   on('fs.stat', ($, e) => {
-    const mtimeMs = world.files.get(e.path)
+    const mtimeMs = world.files.get(posixOf(e.path))
 
     if (mtimeMs === undefined) {
       throw new Error(`ENOENT: ${e.path}`)
@@ -132,11 +138,11 @@ export function inRepository(
     return { value: { kind: 'file', size: 1, mtimeMs, isLink: false } }
   })
 
-  on('fs.exists', ($, e) => ({ value: world.files.has(e.path) }))
+  on('fs.exists', ($, e) => ({ value: world.files.has(posixOf(e.path)) }))
   on('fs.list', () => ({ value: [] }))
   on('fs.read', () => ({ value: '{"version":"9.9.9"}' }))
   on('fs.write', ($, e) => {
-    world.writes.push({ path: e.path, text: e.text })
+    world.writes.push({ path: posixOf(e.path), text: e.text })
 
     return { value: undefined }
   })

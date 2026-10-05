@@ -16,7 +16,7 @@ import { readSnapshot, repoOf, withDetails } from './snapshot'
 import type { Files } from './snapshot'
 import { bandView } from './ui/band'
 import type { Handlers } from './ui/handlers'
-import { changeCountOf, countsOf, operationTextOf } from './ui/model'
+import { changeCountOf, countsOf, fetchAgeOf, operationTextOf } from './ui/model'
 import { PANE_ID, PANE_ROWS, PANE_TITLE, paneView } from './ui/pane'
 import { kitOf } from './ui/theme'
 
@@ -85,11 +85,24 @@ function bind($: EngineInterface): Host {
     every: (ms, fn) => $.clock.every(ms, fn),
     cwd: () => $.session.cwd(),
     sshEnv: () => Promise.all([$.env.get('GIT_SSH_COMMAND'), $.env.get('GIT_SSH')]),
-    setProbe: probe => $.state.set(PROBE_REF, probe),
+    setProbe: async probe => {
+      if ((await read($, PROBE)) !== probe) {
+        await $.state.set(PROBE_REF, probe)
+      }
+    },
     setSnapshot: snapshot => $.state.set(SNAPSHOT_REF, snapshot),
     getSnapshot: () => read($, SNAPSHOT),
     getView: () => read($, VIEW),
-    updateView: change => update($, VIEW, view => change(view ?? INITIAL_VIEW)),
+    updateView: async change => {
+      const view = (await read($, VIEW)) ?? INITIAL_VIEW
+
+      // every write draws the band and the panel again
+      if (JSON.stringify(change(view)) === JSON.stringify(view)) {
+        return view
+      }
+
+      return update($, VIEW, current => change(current ?? INITIAL_VIEW))
+    },
     toast: text => $.ui.toast(text, { timeoutMs: 6000 }),
     log: text => $.ui.log(text, { to: 'debug' }),
     open: pane => $.ui.open(pane),
@@ -122,7 +135,7 @@ export const register: Register = (on, options) => {
   let host: Host | null = null
   let paths: RepoPaths | null = null
   let probedCwd: string | null = null
-  let isRefreshing = false
+  let refreshing: Promise<void> | null = null
   let isRefreshQueued = false
   let refreshTimer: Timer | null = null
   let isActing = false
@@ -139,6 +152,7 @@ export const register: Register = (on, options) => {
   let timers: Timer[] = []
   let version = '?'
   let watchedSign = ''
+  let absentSign = ''
   let fetchErrorAt = 0
 
   /**
@@ -162,11 +176,34 @@ export const register: Register = (on, options) => {
     return times.map(time => time ?? '-').join('|')
   }
 
+  /**
+   * Where a repository appears in the folder (a clone, `git init`), stat'ed
+   * while there is none: a folder rebuilt in place is found within seconds,
+   * without running git. One that appears in a parent folder is left to the
+   * poll.
+   */
+  async function absentSignOf(engine: Host, cwd: string): Promise<string> {
+    const watched = [`${cwd}/.git`, `${cwd}/.git/HEAD`, `${cwd}/.git/index`]
+    const times = await Promise.all(watched.map(path => engine.files.mtimeOf(path).catch(() => null)))
+
+    return [cwd, ...times.map(time => time ?? '-')].join('|')
+  }
+
   async function watch() {
     const engine = host
     const repo = paths
 
-    if (!engine || !repo || isRefreshing) {
+    if (!engine || refreshing) {
+      return
+    }
+
+    if (!repo) {
+      const cwd = await engine.cwd().catch(() => probedCwd ?? '')
+
+      if ((await absentSignOf(engine, cwd)) !== absentSign) {
+        scheduleRefresh(0)
+      }
+
       return
     }
 
@@ -214,6 +251,24 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
   }
 
+  /**
+   * A reading as the band and the panel draw it: all of it but the time it
+   * was read, which shows only as the last fetch's age and staleness.
+   */
+  const drawingOf = (snapshot: ScSnapshot | null): string =>
+    snapshot === null ? 'null' : JSON.stringify({ ...snapshot, readAt: null, fetchAge: fetchAgeOf(snapshot, staleAfterMs) })
+
+  /**
+   * Keeps `snapshot` when it draws differently from the one kept: every
+   * write draws the band and the panel again, and a redraw can swallow a
+   * click on the desktop.
+   */
+  async function show(engine: Host, snapshot: ScSnapshot | null) {
+    if (drawingOf(await engine.getSnapshot()) !== drawingOf(snapshot)) {
+      await engine.setSnapshot(snapshot)
+    }
+  }
+
   const gitFor = (engine: Host): Git => gitOf(engine.run, () => ({ cwd: paths?.root }))
 
   async function refreshOnce(engine: Host) {
@@ -221,12 +276,14 @@ export const register: Register = (on, options) => {
 
     if (paths === null || cwd !== probedCwd) {
       probedCwd = cwd
+      // taken before git looks: a clone landing while it looks still counts
+      absentSign = await absentSignOf(engine, cwd)
       paths = await repoOf(gitFor(engine), cwd)
       await engine.setProbe(paths ? 'repo' : 'none')
     }
 
     if (paths === null) {
-      await engine.setSnapshot(null)
+      await show(engine, null)
 
       return
     }
@@ -236,8 +293,10 @@ export const register: Register = (on, options) => {
 
     if (snapshot === null) {
       paths = null
+      // the next watch looks again
+      absentSign = ''
       await engine.setProbe('none')
-      await engine.setSnapshot(null)
+      await show(engine, null)
 
       return
     }
@@ -253,35 +312,42 @@ export const register: Register = (on, options) => {
 
     const read = view.isPaneOpen ? await withDetails(git, engine.files, snapshot) : snapshot
 
-    await engine.setSnapshot(read)
+    await show(engine, read)
     await reportTour(engine, read)
   }
 
-  async function refresh() {
+  /**
+   * Reads the repository again. A call while a reading runs queues one more
+   * and waits for it: what the caller finds kept afterwards was read after
+   * it called.
+   */
+  function refresh(): Promise<void> {
     const engine = host
 
     if (!engine) {
-      return
+      return Promise.resolve()
     }
 
-    if (isRefreshing) {
+    if (refreshing) {
       isRefreshQueued = true
 
-      return
+      return refreshing
     }
 
-    isRefreshing = true
+    refreshing = (async () => {
+      try {
+        do {
+          isRefreshQueued = false
+          await refreshOnce(engine)
+        } while (isRefreshQueued)
+      } catch (error) {
+        engine.log(`refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        refreshing = null
+      }
+    })()
 
-    try {
-      do {
-        isRefreshQueued = false
-        await refreshOnce(engine)
-      } while (isRefreshQueued)
-    } catch (error) {
-      engine.log(`refresh failed: ${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      isRefreshing = false
-    }
+    return refreshing
   }
 
   function scheduleRefresh(delayMs: number) {
@@ -340,6 +406,8 @@ export const register: Register = (on, options) => {
       notice: isQuiet ? view.notice : null,
     }))
 
+    let settle = (view: ScView): ScView => view
+
     try {
       const git = gitFor(engine)
       const repo = paths
@@ -370,14 +438,14 @@ export const register: Register = (on, options) => {
         fetchErrorAt = at
       }
 
-      await engine.updateView(view => ({
+      settle = view => ({
         ...view,
         fetchError: hasReachedRemote ? null : hasFetchFailed ? outcome.text : view.fetchError,
         notice: isNoticed
           ? { tone: outcome.ok ? 'success' : 'error', text: outcome.text, at, retry: outcome.retry ?? null }
           : view.notice,
         commitField: name === 'commit' && outcome.ok ? view.commitField + 1 : view.commitField,
-      }))
+      })
 
       if (name === 'commit' && outcome.ok) {
         draft = ''
@@ -390,8 +458,11 @@ export const register: Register = (on, options) => {
       return outcome
     } finally {
       isActing = false
-      await engine.updateView(view => ({ ...view, busy: null, isFetching: false }))
+      // the new reading first, then the outcome and the end of busy in one
+      // write: busy ended before the reading lands brings the old button
+      // back for a frame
       await refresh()
+      await engine.updateView(view => ({ ...settle(view), busy: null, isFetching: false }))
     }
   }
 

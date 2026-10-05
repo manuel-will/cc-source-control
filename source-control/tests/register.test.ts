@@ -8,6 +8,21 @@ const SURFACES = ['terminal', 'desktop'] as const
 const BAND = { plugin: PLUGIN, component: 'AbovePrompt', props: BAND_PROPS } as const
 const PANE = { plugin: PLUGIN, component: 'Pane', requestId: 'source-control', props: PANE_PROPS } as const
 
+/**
+ * A repository's files as a fresh clone leaves them, fetched a minute ago.
+ */
+const GIT_FILES: [string, number][] = [
+  ['/work/.git', NOW],
+  ['/work/.git/HEAD', NOW],
+  ['/work/.git/index', NOW],
+  ['/work/.git/FETCH_HEAD', NOW - 60_000],
+]
+
+/**
+ * How often `/git debug` says the band or the panel was drawn.
+ */
+const drawsOf = (text: string | undefined, site: 'band' | 'pane') => Number(new RegExp(`${site}: (\\d+) draws`).exec(text ?? '')?.[1] ?? NaN)
+
 describe('register', () => {
   test('the band shows branch, counts and a Sync button on every surface', async ($, on) => {
     const world = inRepository(on, REPOSITORY, new Map([['/work/.git/FETCH_HEAD', NOW - 60_000]]))
@@ -96,6 +111,44 @@ describe('register', () => {
     expect(world.runs.some(run => run.line.startsWith('push'))).toBe(false)
     expect(world.toasts.at(-1)).toBe('Sync: 2 Commits geholt')
     expect((await ui.find({ type: 'Button', key: 'primary' }))?.text).toBe('✓ Commit…')
+  })
+
+  test('an action ends with its outcome and the new reading in one drawing', async ($, on) => {
+    const script: Script = {
+      ...REPOSITORY,
+      'pull --no-rebase': () => {
+        script['status --porcelain=v2'] = { stdout: BEHIND_STATUS.replace('+0 -2', '+0 -0') }
+
+        return {}
+      },
+    }
+
+    const world = inRepository(on, script, new Map([['/work/.git/FETCH_HEAD', NOW - 60_000]]))
+    const writes: string[] = []
+
+    on('state.set', ($, e, next) => {
+      const { key, value } = e as unknown as { key: string; value: { busy?: string | null; notice?: { text: string } | null; behind?: number } | null }
+
+      if (key === 'view') {
+        writes.push(value?.busy ? 'busy' : `idle${value?.notice ? `: ${value.notice.text}` : ''}`)
+      } else if (key === 'snapshot') {
+        writes.push(`${value?.behind ?? '-'}↓`)
+      }
+
+      return next(e)
+    })
+
+    await started($, world)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+    writes.length = 0
+    await ui.press({ key: 'primary' })
+    await world.clock.advance(100)
+
+    // the old Sync button never comes back between the end of busy and the
+    // new reading
+    expect(writes).toEqual(['busy', '0↓', 'idle: Sync: 2 Commits geholt'])
   })
 
   test('/git opens the panel focused; the panel stages a file and commits', async ($, on) => {
@@ -322,6 +375,75 @@ describe('register', () => {
     await world.clock.advance(2_100)
 
     expect(world.runs.slice(before).some(run => run.line.startsWith('status'))).toBe(true)
+  })
+
+  test('a repository rebuilt in place is found again within seconds', async ($, on) => {
+    const world = inRepository(on, { ...REPOSITORY }, new Map(GIT_FILES))
+
+    on('ui.render', { component: 'AbovePrompt' }, () => ENGINE_BAND)
+    await started($, world)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+    expect(await ui.find({ type: 'Button', key: 'primary' })).toBeDefined()
+
+    // the folder is emptied: no .git, git finds no repository
+    const saved = { rev: world.script['rev-parse --path-format=absolute'], status: world.script['status --porcelain=v2'] }
+
+    delete world.script['rev-parse --path-format=absolute']
+    delete world.script['status --porcelain=v2']
+    world.files.clear()
+    await world.clock.advance(2_100)
+
+    expect(await ui.find({ type: 'Button', key: 'primary' })).toBeUndefined()
+
+    // a fresh clone lands in the same folder, well before the next poll
+    world.script['rev-parse --path-format=absolute'] = saved.rev!
+    world.script['status --porcelain=v2'] = saved.status!
+
+    for (const [path] of GIT_FILES) {
+      world.files.set(path, NOW + 10_000)
+    }
+
+    await world.clock.advance(4_100)
+
+    expect(await ui.find({ type: 'Button', key: 'primary' })).toBeDefined()
+  })
+
+  test('an unchanged repository is not drawn again', async ($, on) => {
+    // without a remote: no background fetch, no fetch age that moves on
+    const world = inRepository(on, { ...REPOSITORY, remote: { stdout: '' } }, new Map(GIT_FILES))
+
+    on('tool.call', () => ({ result: 'done' }))
+    await started($, world)
+    await $.command.run(gitCommand(''))
+    await $.ui.mount({ ...BAND, surface: 'desktop' })
+    await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await world.clock.advance(1_000)
+
+    const before = (await $.command.run(gitCommand('debug'))).text
+
+    // two status polls and a refresh after a tool call, nothing changed
+    await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List' })
+    await world.clock.advance(65_000)
+
+    const after = (await $.command.run(gitCommand('debug'))).text
+    expect(drawsOf(after, 'band')).toBe(drawsOf(before, 'band'))
+    expect(drawsOf(after, 'pane')).toBe(drawsOf(before, 'pane'))
+  })
+
+  test('the age of the last fetch still moves on', async ($, on) => {
+    const world = inRepository(on, { ...REPOSITORY }, new Map(GIT_FILES))
+
+    await started($, world)
+
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+    expect(await ui.find({ type: 'Text', text: /vor 1 min/ })).toBeDefined()
+
+    await world.clock.advance(65_000)
+
+    expect(await ui.find({ type: 'Text', text: /vor 2 min/ })).toBeDefined()
   })
 
   test('a playground repository gets the state the tour waits for', async ($, on) => {

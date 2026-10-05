@@ -113,14 +113,28 @@ export function freshnessOf(
     return { text: t().offline, isWarning: true, isAge: false }
   }
 
-  if (snapshot.fetchedAt === null) {
+  const age = fetchAgeOf(snapshot, staleAfterMs)
+
+  if (age === null) {
     return { text: t().neverChecked, isWarning: true, isAge: false }
+  }
+
+  return { ...age, isAge: true }
+}
+
+/**
+ * How long before the reading the last fetch was, in words, flagged once
+ * older than `staleAfterMs`; null when it never ran or there is no remote
+ * (nothing is shown then). All a drawing shows of the reading's time.
+ */
+export function fetchAgeOf(snapshot: ScSnapshot, staleAfterMs: number): { text: string; isWarning: boolean } | null {
+  if (snapshot.fetchedAt === null || snapshot.remoteName === null) {
+    return null
   }
 
   return {
     text: agoOf(snapshot.fetchedAt, snapshot.readAt),
     isWarning: snapshot.readAt - snapshot.fetchedAt > staleAfterMs,
-    isAge: true,
   }
 }
 

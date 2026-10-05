@@ -1,6 +1,6 @@
 {
   "name": "source-control",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Source Control for Claude Code: Git status above the chat box, a panel with changes, commit, a history graph, branches and worktrees, plus fetch, pull, push and sync in one click. English and German.",
   "author": {
     "name": "manuel-will"
